@@ -1,3 +1,5 @@
+<img width="1280" height="406" alt="NotermArtworkGithub" src="https://github.com/user-attachments/assets/bb0361b3-2956-40ce-a87f-7a9cd65f66e0" />
+
 # Noterm 📝
 
 A lightning-fast, terminal-based note-taking TUI (Text User Interface) built by repurposing the power of `fzf`. 
