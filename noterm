@@ -1,0 +1,300 @@
+#!/bin/bash
+# Noterm: A terminal based note taking TUI. Made by repurposing fuzzy-finder (fzf).
+# by Pinac Joshi
+
+set -e
+
+# CONFIGURATION INITIALIZATION
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/noterm" 
+CONFIG_FILE="$CONFIG_DIR/noterm.conf"
+GLOW_STYLE_FILE="$CONFIG_DIR/glow-style.json"
+
+# Default Config Settings
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  mkdir -p "$CONFIG_DIR"
+  cat <<EOF > "$CONFIG_FILE"
+## Noterm Global Configuration
+# Default Folder where Notes are added. You can change this to any locaiton.
+NOTERM_DIR="$HOME/NotermNotes" 
+
+# Editor used to edit/view notes.
+NOTERM_EDITOR="nano" 
+
+# Noterm supports txt and markdown. 
+# This option needs to be changed to md to enable glow in preview window.
+NOTERM_FILE_FORMAT="txt"          # Options: 'txt' or 'md'
+
+# UI Configuration
+NOTERM_PREVIEW_SIDE="right"       # Options: 'left','right','up','down'
+NOTERM_PREVIEW_SIZE="50%"         # Options: '0%' to '99%' (Recommended: 50%)
+NOTERM_THEME="dark"               # Options: 'light' or 'dark'
+
+# FZF Engine Configuration
+NOTERM_MATCH_MODE="smart-case"    # Options: 'exact' or 'smart-case'
+NOTERM_CASE="ignore-case"         # Options: 'ignore-case' or 'no-ignore-case'
+NOTERM_ANSI="true"                # Options: 'true' or 'false'
+NOTERM_COLOR="true"               # Options: 'true' or 'false'
+NOTERM_BOLD="true"                # Options: 'true' or 'false'
+NOTERM_LAYOUT="reverse"           # Options: 'reverse' or 'default'
+NOTERM_GAP=""                     # Integer for gap spacing (leave empty for none)
+
+# Previewer Color Support
+NOTERM_BAT_COLOR="true"           # Options: 'true' or 'false'
+NOTERM_GLOW_COLOR="true"          # Options: 'true' or 'false'
+EOF
+fi
+
+# Config Generation for GLOW
+# Needed Custom Glow config to remove margin in fzf preview window
+
+if [[ ! -f "$GLOW_STYLE_FILE" ]]; then
+  mkdir -p "$CONFIG_DIR"
+  cat <<EOF > "$GLOW_STYLE_FILE"
+{
+  "document": { "margin": 0 },
+  "heading": { "color": "#58a6ff", "bold": true },
+  "strong": { "bold": true, "color": "#ffffff" },
+  "emph": { "italic": true },
+  "blockquote": { "color": "#8b949e", "indent": 1, "indent_token": "│ " },
+  "link": { "color": "#58a6ff", "underline": true },
+  "code": { "color": "#ff7b72" },
+  "code_block": { "margin": 0 },
+  "list": { "level_indent": 2 },
+  "item": { "block_prefix": "• " }
+}
+EOF
+fi
+
+
+# CONFIG ARGUMENT PARSER
+
+if [[ "$1" == "--config" ]]; then
+  ${EDITOR:-vi} "$CONFIG_FILE"
+  exit 0
+fi
+
+source "$CONFIG_FILE"
+
+
+# VALIDATION & DEPENDENCIES
+# If given config fails for any given var, it defaults to the given value.
+
+validate_config() {
+  [[ ! "$NOTERM_THEME" =~ ^(dark|light)$ ]] && NOTERM_THEME="dark"
+  [[ ! "$NOTERM_PREVIEW_SIDE" =~ ^(left|right|up|down)$ ]] && NOTERM_PREVIEW_SIDE="right"
+  [[ ! "$NOTERM_PREVIEW_SIZE" =~ ^[0-9]+%$ ]] && NOTERM_PREVIEW_SIZE="50%"
+  [[ ! "$NOTERM_FILE_FORMAT" =~ ^(txt|md)$ ]] && NOTERM_FILE_FORMAT="txt"
+  [[ ! "$NOTERM_LAYOUT" =~ ^(reverse|default)$ ]] && NOTERM_LAYOUT="reverse"
+
+  [[ ! "$NOTERM_MATCH_MODE" =~ ^(exact|smart-case)$ ]] && NOTERM_MATCH_MODE="smart-case"
+  [[ ! "$NOTERM_CASE" =~ ^(ignore-case|no-ignore-case)$ ]] && NOTERM_CASE="ignore-case"
+  [[ ! "$NOTERM_ANSI" =~ ^(true|false)$ ]] && NOTERM_ANSI="true"
+  [[ ! "$NOTERM_COLOR" =~ ^(true|false)$ ]] && NOTERM_COLOR="true"
+  [[ ! "$NOTERM_BOLD" =~ ^(true|false)$ ]] && NOTERM_BOLD="true"
+  [[ ! "$NOTERM_BAT_COLOR" =~ ^(true|false)$ ]] && NOTERM_BAT_COLOR="true"
+  [[ ! "$NOTERM_GLOW_COLOR" =~ ^(true|false)$ ]] && NOTERM_GLOW_COLOR="true"
+  
+  [[ ! "$NOTERM_GAP" =~ ^[0-9]*$ ]] && NOTERM_GAP=""
+
+  if [[ ! -d "$NOTERM_DIR" ]]; then
+    mkdir -p "$NOTERM_DIR"
+  fi
+}
+
+bat_cmd="bat"
+
+# Checks if fzf and given editor is installed 
+# Also checks glow installation if md is defined in config.
+check_dependencies() {
+  local missing_deps=()
+
+  for cmd in fzf "$NOTERM_EDITOR"; do
+    if ! command -v "$cmd" &> /dev/null; then
+      missing_deps+=("$cmd")
+    fi
+  done
+
+  # Optional Check
+  if [[ "$NOTERM_FILE_FORMAT" == "md" ]]; then
+    if ! command -v glow &> /dev/null; then
+      missing_deps+=("glow")
+    fi
+  fi
+
+  if ! command -v bat &> /dev/null; then
+    if command -v batcat &> /dev/null; then
+      bat_cmd="batcat"
+    else
+      missing_deps+=("bat")
+    fi
+  fi
+
+  if [[ ${#missing_deps[@]} -gt 0 ]]; then
+    echo "[-] Error: Noterm is missing required dependencies."
+    echo "Please install the following: ${missing_deps[*]}"
+    exit 1
+  fi
+}
+
+# GLOBAL FZF CONFIGURATION
+
+fzf_opts=()
+
+build_fzf_opts() {
+  [[ "$NOTERM_MATCH_MODE" == "exact" ]] && fzf_opts+=("--exact") || fzf_opts+=("--smart-case")
+  [[ "$NOTERM_CASE" == "no-ignore-case" ]] && fzf_opts+=("--no-ignore-case") || fzf_opts+=("--ignore-case")
+  [[ "$NOTERM_ANSI" == "true" ]] && fzf_opts+=("--ansi")
+  [[ "$NOTERM_COLOR" == "false" ]] && fzf_opts+=("--no-color") || fzf_opts+=("--color")
+  [[ "$NOTERM_BOLD" == "false" ]] && fzf_opts+=("--no-bold") || fzf_opts+=("--bold")
+  [[ -n "$NOTERM_GAP" ]] && fzf_opts+=("--gap=$NOTERM_GAP")
+  fzf_opts+=("--layout=$NOTERM_LAYOUT")
+}
+
+validate_config
+check_dependencies
+build_fzf_opts
+
+# HELP SCREEN CONTENT
+
+HELP_TEXT="
+                           NOTERM HELP MENU
+                           ----------------
+    [ Navigation ]
+    Enter          : Edit/View selected note
+    Ctrl + Space   : Jump Mode (Type a letter to jump to a file)
+    Up / Down      : Move selection
+    Ctrl + J       : Move Down
+    Ctrl + K       : Move Up
+
+    [ Actions ]
+    Ctrl + N       : Create a new note
+    Ctrl + Q       : Quit Noterm
+    Ctrl + H       : Show this help screen
+
+    [ Configuration ]
+    To change theme, editor, or layout, run:
+    noterm --config
+"
+
+## CORE LOGIC ##
+
+# Default Footer
+default_footer_text=" ^N: New Note | ^Q: Quit | ^H: Help | ^Space: Jump "
+
+# Default Keybinds
+quit_key="ctrl-q" 
+note_key="ctrl-n"
+help_key="ctrl-h"
+
+# New note creation status. This var updates the footer depending if new note creation fails or succeeds
+note_creation_status_footer=""
+
+# This is the File selection funciton. This function handles every ui element, keybind. 
+# It echoes the result back to the main funciton. 
+function select_file() {
+  local out
+  local footer_text="$default_footer_text"
+
+  # Checks if footer note creation status is empty or not and updates footer text accordingly.
+  if [[ -n "$note_creation_status_footer" ]]; then
+    footer_text="$note_creation_status_footer"
+  fi
+
+  # Checks if bat color is defined by user
+  local bat_color_arg="always"
+  [[ "$NOTERM_BAT_COLOR" == "false" ]] && bat_color_arg="never"
+
+  # Checks if glow env is defined by user
+  # Forced CLICOLOR so glow doesn't strip ANSI codes when piped into fzf
+  local glow_env="env CLICOLOR_FORCE=1 "
+  [[ "$NOTERM_GLOW_COLOR" == "false" ]] && glow_env="env NO_COLOR=1 "
+
+  # Defines help text. Uses bat by default, falls back to less
+  local help_cmd="echo -e '$HELP_TEXT' | $bat_cmd --style=plain --color=$bat_color_arg --paging=always 2>/dev/null \
+                  || echo -e '$HELP_TEXT' | less"
+
+  # Defines preview text in fzf preview window
+  # Adds or removes glow depending on users preferrence 
+  local preview_cmd
+  if [[ "$NOTERM_FILE_FORMAT" == "md" ]]; then
+      preview_cmd="([[ {} == *.md ]] && ${glow_env}glow -s '$GLOW_STYLE_FILE' -w \$((FZF_PREVIEW_COLUMNS)) {}) || $bat_cmd --style=auto --color=$bat_color_arg {} 2>/dev/null"
+  else
+      preview_cmd="$bat_cmd --style=auto --color=$bat_color_arg {} 2>/dev/null"
+  fi
+
+  ## Main fzf command
+  # --bind up,down,left,right: Used to change footer after displaying note creation message.
+  # --bind ctrl-space: Enables Jump mode in fzf
+  # --bind $help-key: Shows help command
+  # --expect $quit_key,$note_key: Used expect instead of bind, inorder to return keybind to main func
+  out=$( ls | fzf "${fzf_opts[@]}" \
+    --expect=$quit_key,$note_key \
+    --style minimal \
+    --preview="$preview_cmd" \
+    --preview-window=${NOTERM_PREVIEW_SIDE}:${NOTERM_PREVIEW_SIZE} \
+    --info right \
+    --input-border bold \
+    --header="Noterm: $NOTERM_DIR" \
+    --header-first \
+    --header-border none \
+    --footer="$footer_text" \
+    --bind="up:change-footer($default_footer_text)+up" \
+    --bind="down:change-footer($default_footer_text)+down" \
+    --bind="left:change-footer($default_footer_text)+backward-char" \
+    --bind="right:change-footer($default_footer_text)+forward-char" \
+    --preview-border rounded \
+    --bind="ctrl-space:jump" \
+    --bind="$help_key:execute($help_cmd)" \
+    --prompt="> " )
+
+  # Resets footer note creation status
+  note_creation_status_footer=""
+
+  echo "$out"
+}
+
+function main() {
+  cd "$NOTERM_DIR" || exit 1
+
+  while true; do
+    local result
+    result=$(select_file)
+
+    local key
+    key=$(head -n1 <<< "$result")
+
+    local file
+    file=$(sed -n '2p' <<< "$result")
+
+    if [[ "$key" == "$quit_key" || ( -z "$key" && -z "$file" ) ]]; then
+      exit 0
+    fi
+
+    if [[ "$key" == "$note_key" ]]; then
+      local filename
+      filename=$(ls | fzf "${fzf_opts[@]}" \
+      --print-query \
+      --prompt="New Note Name: " \
+      --input-border bold \
+      --info right \
+      | head -n1)
+      
+      if [[ -n "$filename" && ! "$filename" =~ [^a-zA-Z0-9._\ -] && ! -f "$filename.$NOTERM_FILE_FORMAT" ]]; then
+        touch "$filename.$NOTERM_FILE_FORMAT"
+        note_creation_status_footer="Success: Created $filename "
+        $NOTERM_EDITOR "$filename.$NOTERM_FILE_FORMAT"
+      else
+        note_creation_status_footer="Failed to create note"
+      fi
+      continue
+    fi
+
+    if [[ -n "$file" && "$file" != "." ]]; then
+        $NOTERM_EDITOR "$file"
+    fi
+  done
+}
+
+main
