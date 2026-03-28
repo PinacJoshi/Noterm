@@ -63,6 +63,7 @@ noterm --config
 |---|------|
 |Enter|Edit/View selected note|
 |Ctrl + N|Create a new note|
+|Ctrl + D|Delete Selected note|
 |Ctrl + Q|Quit Noterm|
 |Ctrl + H|Show the Help Menu|
 |Ctrl + Space|Trigger Jump Mode|
