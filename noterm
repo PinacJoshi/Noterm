@@ -257,10 +257,9 @@ function main() {
 
     # 2. Handle Deletion (Ctrl-D)
     if [[ "$key" == "$delete_key" && -n "$file" && -f "$file" ]]; then
-      # Spawn a mini fzf instance just to confirm
       local confirm
       confirm=$(printf "No\nYes" | fzf --prompt="Delete '$file'? " --layout=reverse \
-      --input-border bold) 
+      --input-border bold)
       
       if [[ "$confirm" == "Yes" ]]; then
         rm "$file"
@@ -281,12 +280,24 @@ function main() {
       --info right \
       | head -n1)
       
-      if [[ -n "$filename" && ! "$filename" =~ [^a-zA-Z0-9._\ -] && ! -f "$filename.$NOTERM_FILE_FORMAT" ]]; then
-        touch "$filename.$NOTERM_FILE_FORMAT"
-        action_status_message="[+] Success: Created $filename "
-        $NOTERM_EDITOR "$filename.$NOTERM_FILE_FORMAT"
+      if [[ -n "$filename" && ! "$filename" =~ [^a-zA-Z0-9._\ -] ]]; then
+        
+        # Extension Detection Logic
+        local target_file="$filename"
+        if [[ ! "$filename" =~ \.[a-zA-Z0-9]+$ ]]; then
+          target_file="${filename}.${NOTERM_FILE_FORMAT}"
+        fi
+
+        if [[ ! -f "$target_file" ]]; then
+          touch "$target_file"
+          action_status_message="[+] Success: Created $target_file "
+          $NOTERM_EDITOR "$target_file"
+        else
+          action_status_message="[-] Error: '$target_file' already exists"
+        fi
+
       else
-        action_status_message="[-] Failed to create note / Action canceled"
+        action_status_message="[-] Action canceled or invalid filename"
       fi
       continue
     fi
